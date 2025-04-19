@@ -7,7 +7,6 @@ A real-time stock market analysis tool that aggregates and analyzes news from mu
 - Real-time market data from multiple sources
 - AI-powered analysis of market trends
 - Interactive Q&A about market conditions
-- Automatic report generation
 - User-friendly web interface
 
 ## Setup
