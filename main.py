@@ -13,9 +13,8 @@ OPENAI_BASE_URL = os.getenv('OPENAI_BASE_URL')
 
 # Initialize LLM with optimal settings
 llm = ChatOpenAI(
-    openai_api_key=OPENAI_API_KEY,
-    base_url=OPENAI_BASE_URL,
-    model="(paid) gpt-4o-mini",
+    openai_api_key="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",
+    model="gpt-4o-mini",
     temperature=0.3,
     request_timeout=60
 )
