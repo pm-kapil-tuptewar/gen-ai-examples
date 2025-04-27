@@ -7,6 +7,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.documents import Document
 from dotenv import load_dotenv
+from langchain.text_splitter import TokenTextSplitter
 
 # Load environment variables
 load_dotenv()
@@ -134,71 +135,124 @@ def fetch_all_screener_sections(stock_symbol):
     return sections
 
 
+def create_vector_store(sections):
+    # Create documents for each section
+    documents = []
+    for label, content in sections.items():
+        # Split content into smaller chunks for better retrieval
+        lines = content.split('\n')
+        for i in range(0, len(lines), 5):  # Process 5 lines at a time
+            chunk = '\n'.join(lines[i:i+5])
+            if chunk.strip():  # Only add non-empty chunks
+                doc = Document(
+                    page_content=chunk,
+                    metadata={"section": label}
+                )
+                documents.append(doc)
+    
+    # Create embeddings
+    embeddings = OpenAIEmbeddings(
+        openai_api_key=OPENAI_API_KEY,
+    base_url=OPENAI_BASE_URL,
+    model="(paid) text-embedding-3-large"
+    )
+    
+    # Create vector store
+    vector_store = FAISS.from_documents(documents, embeddings)
+    return vector_store
+
+def get_relevant_context(vector_store, query, k=5):
+    # Search for relevant documents
+    docs = vector_store.similarity_search(query, k=k)
+    
+    # Group documents by section and maintain order
+    sections_dict = {}
+    for doc in docs:
+        section = doc.metadata["section"]
+        if section not in sections_dict:
+            sections_dict[section] = []
+        sections_dict[section].append(doc.page_content)
+    
+    # Format context with section headers
+    context_parts = []
+    for section, contents in sections_dict.items():
+        context_parts.append(f"=== {section} ===\n" + "\n".join(contents))
+    
+    return "\n\n".join(context_parts)
+
 def main():
     st.title("🔎 Screener.in Stock Lookup + LLM")
     stock_query = st.text_input("Enter the stock symbol (e.g., GAIL, TCS, INFY):", "")
     user_question = st.text_input("Ask a question about this company (e.g., Show latest quarterly profit, List peers, etc.):", "")
+    
     if st.button("Search & Analyze", key="search_button") and stock_query.strip():
         with st.spinner(f"Fetching financial data for '{stock_query}' from Screener.in..."):
             sections = fetch_all_screener_sections(stock_query.strip().upper())
         st.markdown("---")
 
         if user_question:
+            with st.spinner("Creating vector database..."):
+                vector_store = create_vector_store(sections)
+            
+            with st.spinner("Finding relevant information..."):
+                context = get_relevant_context(vector_store, user_question)
+            
             llm = ChatOpenAI(
                 openai_api_key=OPENAI_API_KEY,
                 base_url=OPENAI_BASE_URL,
                 model="(paid) o3-mini",
-                temperature=1)
-            
-            # Define specialized prompts for different types of analysis
-            shareholding_prompt = """
-When analyzing shareholding patterns:
-1. For each category (Promoters, FIIs, DIIs, etc.), compare the latest quarter (rightmost) with the previous quarters
-2. Calculate the trend (increasing, decreasing, or stable)
-3. Format your response as follows:
-   - Latest holding (Mar 2025): X%
-   - Year ago (Mar 2024): Y%
-   - Change: Show if increased/decreased and by how much
-4. Highlight significant changes:
-   - If any category shows a consistent uptrend/downtrend over multiple quarters
-   - If any category has made a significant change (>2% change)
-"""
+                temperature=1)  # Reduced temperature for more consistent analysis
 
-            pnl_prompt = """
-When analyzing Profit & Loss statements:
-1. Summarize key financial trends in simple, non-technical language
-2. Highlight major changes:
-   - Sharp rises or falls in sales
-   - Significant profit changes
-   - Important margin variations
-3. Compare important figures across years
-4. Focus on these key metrics:
-   - Sales growth trend
-   - Operating profit trend and OPM% changes
-   - Net profit trend
-   - EPS trend
-   - Dividend payout pattern
-5. Be concise and clear - explain like you're talking to a beginner investor
-6. Provide actionable insights when possible
-"""
-
-            # Determine which prompt to use based on the question
-            question_lower = user_question.lower()
-            if any(term in question_lower for term in ["shareholding", "promoter", "fii", "dii", "stake", "holding"]):
-                analysis_prompt = shareholding_prompt
-            elif any(term in question_lower for term in ["profit", "loss", "pnl", "margin", "sales", "revenue", "eps", "dividend"]):
-                analysis_prompt = pnl_prompt
-            else:
-                analysis_prompt = "Provide a clear and concise analysis based on the available data."
-
-            # Concatenate all sections as context
-            context = "\n\n".join([f"=== {label} ===\n{content}" for label, content in sections.items()])
-
-            # Construct the final system prompt
+            # Investment analysis prompt
             system_prompt = f"""
-You are a financial analyst expert. Use the following company data to answer the user's question as accurately as possible.
+You are a financial assistant specialized in analyzing stocks for potential investments.
+The user is looking for a simple, easy-to-understand explanation of a company's key financials and fundamentals to help decide whether to invest.
 
-{analysis_prompt}
+You are given structured data about the company, including:
+
+Company Overview
+Current Market Price (CMP) and its 52-week High/Low prices
+Market Cap, PE Ratio, ROE, ROCE
+Profit & Loss Statement
+Balance Sheet Details
+Cash Flow Statement
+Key Ratios (like Cash Conversion Cycle, ROCE, Working Capital Days)
+Shareholding Pattern (Promoters, FIIs, DIIs, Public)
+Peer Comparison with competitors
+Pros and Cons of the stock (highlighted)
+
+Your tasks are:
+
+Mention the current market price (CMP) along with the 52-week high and low prices, and briefly state whether the stock is currently near its high, low, or mid-range.
+
+Summarize how the company's sales, profits, and margins have grown or declined over time.
+
+Comment on the company's asset strength, debt levels, and cash flow trends.
+
+Highlight important financial health indicators (e.g., improving ROE, steady OPM%, low or manageable debt).
+
+Analyze shareholding patterns: whether promoters are holding steady, if FIIs/DIIs are increasing or decreasing stakes.
+
+Mention how the company compares to its industry peers based on valuation (P/E), profitability (ROCE), and growth metrics.
+
+Clearly state the Pros and Cons already given — in very simple language.
+
+Keep your language clear, easy to understand, and free from heavy jargon — imagine explaining it to a beginner investor.
+
+Keep the explanation brief, clean, and actionable: highlight positives for investment but also mention potential risks or red flags.
+
+Important:
+
+If the company is trading near its 52-week high, highlight that as a sign of positive momentum but advise caution about valuations.
+
+If trading near its 52-week low, mention it could be undervalued but investigate why.
+
+If promoter shareholding is stable or increasing, mention it positively.
+
+If cash flows or margins are volatile, mention it as a risk factor.
+
+Always close with a one-line investment advice summary such as:
+"Based on the above factors, this stock appears to be a stable/growing/balanced opportunity for moderate/long-term investment, with key risks to monitor."
 
 Here is the company data:
 {context}
@@ -209,10 +263,71 @@ Here is the company data:
                 {"role": "user", "content": user_question}
             ]
             with st.spinner("Analyzing with LLM..."):
-                answer = llm.invoke(messages).content.strip()
-            st.markdown("---")
-            st.subheader("LLM Answer")
-            st.write(answer)
+                raw_answer = llm.invoke(messages).content.strip()
+            
+            # Format the response for better readability
+            st.subheader("📊 Investment Analysis")
+            
+            # Split the answer into sections based on common patterns
+            sections = raw_answer.split('\n\n')
+            
+            for section in sections:
+                if not section.strip():
+                    continue
+                    
+                # Try to identify section titles
+                if ':' in section:
+                    title, content = section.split(':', 1)
+                    st.markdown(f"### {title.strip()}")
+                    
+                    # Format bullet points
+                    points = content.split('•')
+                    for point in points:
+                        if point.strip():
+                            st.markdown(f"• {point.strip()}")
+                else:
+                    # Handle sections without clear titles
+                    lines = section.split('\n')
+                    for line in lines:
+                        if line.strip():
+                            if line.strip().endswith(':'):
+                                st.markdown(f"### {line.strip()}")
+                            else:
+                                st.markdown(f"• {line.strip()}")
+                
+                st.markdown("")
+            
+            # Add key metrics in a more visual format
+            if "CMP" in raw_answer or "Market Cap" in raw_answer:
+                st.markdown("### 📈 Key Metrics")
+                col1, col2, col3 = st.columns(3)
+                
+                # Extract and display metrics
+                metrics = {
+                    "CMP": r"₹\s*([\d,.]+)",
+                    "Market Cap": r"Market Cap[:\s]+(₹[\d,.]+ Cr)",
+                    "P/E": r"P/?E[:\s]+([\d,.]+)",
+                    "ROCE": r"ROCE[:\s]+([\d,.]+)%",
+                    "ROE": r"ROE[:\s]+([\d,.]+)%",
+                    "Dividend Yield": r"Dividend[\s]+Yield[:\s]+([\d,.]+)%"
+                }
+                
+                import re
+                for metric, pattern in metrics.items():
+                    match = re.search(pattern, raw_answer)
+                    if match:
+                        value = match.group(1)
+                        if col1.container():
+                            col1.metric(metric, value)
+                        elif col2.container():
+                            col2.metric(metric, value)
+                        else:
+                            col3.metric(metric, value)
+            
+            # Add a final summary box if there's a conclusion
+            if "Based on" in raw_answer:
+                st.markdown("")
+                st.info("💡 " + raw_answer.split("Based on")[-1].strip())
 
 if __name__ == "__main__":
     main()
