@@ -4,7 +4,11 @@ import re
 import datetime
 from dotenv import load_dotenv
 from langchain_community.document_loaders import WebBaseLoader
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+import tempfile
+import pickle
 
 # Load environment variables
 load_dotenv()
@@ -15,9 +19,18 @@ OPENAI_BASE_URL = os.getenv('OPENAI_BASE_URL')
 llm = ChatOpenAI(
     openai_api_key=OPENAI_API_KEY,
     base_url=OPENAI_BASE_URL,
-    model="(paid) gpt-4o-mini",
-    temperature=0.3,
+    # model="(paid) gpt-4o-mini",
+    # temperature=0.3,
+    model="(paid) o3-mini",
+    temperature=1,
     request_timeout=60
+)
+
+# Embedding model for FAISS
+embeddings = OpenAIEmbeddings(
+    openai_api_key=OPENAI_API_KEY,
+    base_url=OPENAI_BASE_URL,
+    model="(paid) text-embedding-3-large"
 )
 
 # URLs to process - prioritized and categorized
@@ -32,11 +45,10 @@ URLS = {
 def process_url(url):
     """Process a single URL and extract market information"""
     try:
-        with st.spinner(f"Processing {url.split('/')[-2]}..."):
-            loader = WebBaseLoader([url])
-            docs = loader.load()
-            content = "\n\n".join([doc.page_content for doc in docs])
-            return text_clean(content)
+        loader = WebBaseLoader([url])
+        docs = loader.load()
+        content = "\n\n".join([doc.page_content for doc in docs])
+        return text_clean(content)
     except Exception as e:
         st.error(f"Error loading {url}: {e}")
         return None
@@ -93,64 +105,19 @@ def main():
     st.title("📊 Indian Stock Market Analysis")
     st.markdown("---")
 
-    # Sidebar for source selection
-    st.sidebar.title("Settings")
-    selected_sources = st.sidebar.multiselect(
-        "Select News Sources",
-        list(URLS.keys()),
-        default=list(URLS.keys())[:3]
+    # No sidebar, always use all URLs
+
+    # Single chat-style input for any question
+    user_query = st.text_input(
+        "Ask anything about Indian stock markets, companies, or financial news:",
+        placeholder="e.g., Give me a list of top 5 stocks with reasons for their performance"
     )
-
-    # Query type selection
-    query_type = st.radio(
-        "Select the type of information you need:",
-        ["Stock Prices", "Company Announcements", "Financial Results", "Custom Query"],
-        horizontal=True
-    )
-
-    # Example queries based on type
-    example_queries = {
-        "Stock Prices": [
-            "What are the top gaining stocks today?",
-            "Show me stocks with highest trading volume",
-            "List IT sector stock movements"
-        ],
-        "Company Announcements": [
-            "Show recent company announcements",
-            "List latest dividend announcements",
-            "Show merger and acquisition news"
-        ],
-        "Financial Results": [
-            "Show latest quarterly results",
-            "Companies that beat earnings expectations",
-            "IT companies Q4 results"
-        ],
-        "Custom Query": [
-            "Type your own market-related query"
-        ]
-    }
-
-    # Show example queries
-    if query_type != "Custom Query":
-        example = st.selectbox(
-            "Select an example query or type your own:",
-            example_queries[query_type]
-        )
-        user_query = st.text_input("Customize your query:", value=example)
-    else:
-        user_query = st.text_input(
-            "Enter your query:",
-            placeholder="e.g., Which sectors are performing well today?"
-        )
 
     # Add analyze button
     analyze_button = st.button("🔍 Analyze Market", type="primary")
 
     if analyze_button:
-        if not selected_sources:
-            st.warning("Please select at least one news source.")
-            return
-
+        # Always proceed, all URLs are used
         # Create two columns for progress and results
         col1, col2 = st.columns([1, 2])
 
@@ -158,22 +125,38 @@ def main():
             st.subheader("Processing Sources")
             progress_bar = st.progress(0)
             
-            # Process each selected source
+            # Process each re-source
             all_content = []
-            for i, source in enumerate(selected_sources):
+            for i, source in enumerate(URLS.keys()):
                 st.write(f"📰 Processing {source}...")
                 content = process_url(URLS[source])
                 if content:
                     all_content.append(content)
-                progress_bar.progress((i + 1) / len(selected_sources))
+                progress_bar.progress((i + 1) / len(URLS))
 
         with col2:
             if all_content:
-                st.subheader(f"📈 {query_type} Analysis")
-                combined_content = "\n\n".join(all_content)
-                
-                # Get analysis based on user query
-                analysis = extract_stock_info(combined_content, user_query)
+                st.subheader(f"📈 Analysis")
+                # --- FAISS Embedding & Retrieval Logic ---
+                # 1. Split all_content into chunks
+                splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+                docs = []
+                for i, content in enumerate(all_content):
+                    # Each content is string, wrap as Document
+                    docs.extend(splitter.create_documents([content]))
+                # 2. Use a temp directory to cache the FAISS index for this session
+                faiss_path = os.path.join(tempfile.gettempdir(), "faiss_index")
+                if os.path.exists(faiss_path):
+                    vectorstore = FAISS.load_local(faiss_path, embeddings, allow_dangerous_deserialization=True)
+                else:
+                    vectorstore = FAISS.from_documents(docs, embeddings)
+                    vectorstore.save_local(faiss_path)
+                # 3. Retrieve relevant chunks for user_query
+                relevant_docs = vectorstore.similarity_search(user_query, k=5)
+                context = "\n\n".join(doc.page_content for doc in relevant_docs)
+                print('context', len(context))
+                # 4. Get analysis based on only relevant context
+                analysis = extract_stock_info(context, user_query)
                 
                 if analysis:
                     # Add query context and timestamp
@@ -186,7 +169,7 @@ def main():
                     
                     # Show sources
                     st.markdown("---")
-                    st.caption(f"Sources: {', '.join(selected_sources)}")
+                    st.caption(f"Sources: {', '.join(URLS.keys())}")
                 else:
                     st.warning("⚠️ No relevant information found for your query.")
             else:
