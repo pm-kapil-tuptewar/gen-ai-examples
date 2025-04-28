@@ -3,6 +3,7 @@ st.set_page_config(page_title="Screener Stock Lookup", page_icon="📈")
 import requests
 from bs4 import BeautifulSoup
 import os
+import pandas as pd
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.documents import Document
@@ -180,9 +181,43 @@ def get_relevant_context(vector_store, query, k=5):
     
     return "\n\n".join(context_parts)
 
+def load_stock_symbols():
+    try:
+        df = pd.read_csv('list_of_stocks.csv')
+        # Create a dict of symbol -> company name for display
+        return {row['SYMBOL']: f"{row['SYMBOL']} - {row['NAME OF COMPANY']}" 
+                for _, row in df.iterrows()}
+    except Exception as e:
+        st.error(f"Error loading stock symbols: {str(e)}")
+        return {}
+
 def main():
     st.title("🔎 Screener.in Stock Lookup + LLM")
-    stock_query = st.text_input("Enter the stock symbol (e.g., GAIL, TCS, INFY):", "")
+    
+    # Load stock symbols
+    stock_symbols = load_stock_symbols()
+    
+    if stock_symbols:
+        # Create a list of formatted options for the selectbox
+        options = list(stock_symbols.values())
+        options.insert(0, "")  # Add empty option at the start
+        
+        # Single searchable dropdown
+        selected = st.selectbox(
+            "Search and select a stock:",
+            options=options,
+            key="stock_selector"
+        )
+        
+        # Extract symbol from selection
+        if selected and selected != "":
+            stock_query = selected.split(' - ')[0]
+        else:
+            stock_query = ""
+    else:
+        # Fallback to simple text input if CSV loading fails
+        stock_query = st.text_input("Enter the stock symbol (e.g., GAIL, TCS, INFY):", "")
+    
     user_question = st.text_input("Ask a question about this company (e.g., Show latest quarterly profit, List peers, etc.):", "")
     
     if st.button("Search & Analyze", key="search_button") and stock_query.strip():
@@ -211,49 +246,62 @@ The user is looking for a simple, easy-to-understand explanation of a company's 
 You are given structured data about the company, including:
 
 Company Overview
+
 Current Market Price (CMP) and its 52-week High/Low prices
+
 Market Cap, PE Ratio, ROE, ROCE
-Profit & Loss Statement
+
+Net Profit (after tax and expenses)
+
 Balance Sheet Details
+
 Cash Flow Statement
+
 Key Ratios (like Cash Conversion Cycle, ROCE, Working Capital Days)
+
 Shareholding Pattern (Promoters, FIIs, DIIs, Public)
+
 Peer Comparison with competitors
+
 Pros and Cons of the stock (highlighted)
 
 Your tasks are:
 
 Mention the current market price (CMP) along with the 52-week high and low prices, and briefly state whether the stock is currently near its high, low, or mid-range.
 
-Summarize how the company's sales, profits, and margins have grown or declined over time.
+Focus mainly on Net Profit trends over time — whether the company's bottom-line profit has increased or decreased after all taxes and expenses.
 
-Comment on the company's asset strength, debt levels, and cash flow trends.
+Avoid discussing sales, operating profit, or other income unless directly relevant to Net Profit behavior.
 
-Highlight important financial health indicators (e.g., improving ROE, steady OPM%, low or manageable debt).
+Comment on the company's asset strength, debt levels, and cash flow trends briefly, especially if they impact future profitability.
 
-Analyze shareholding patterns: whether promoters are holding steady, if FIIs/DIIs are increasing or decreasing stakes.
+Highlight important financial health indicators (like ROE, ROCE) if they support the profit story.
 
-Mention how the company compares to its industry peers based on valuation (P/E), profitability (ROCE), and growth metrics.
+Analyze shareholding patterns: whether promoter holding is stable/increasing, and any trends in FIIs/DIIs.
 
-Clearly state the Pros and Cons already given — in very simple language.
+Compare the company's Net Profit growth and profitability against industry peers if possible (based on available metrics like ROCE, P/E).
 
-Keep your language clear, easy to understand, and free from heavy jargon — imagine explaining it to a beginner investor.
+Clearly state the Pros and Cons already provided — in very simple, non-technical language.
 
-Keep the explanation brief, clean, and actionable: highlight positives for investment but also mention potential risks or red flags.
+Keep the language clear, easy to understand, and free from jargon — explain it like you would to a beginner investor.
+
+Keep the explanation brief, clean, and actionable, focusing on Net Profit performance and sustainability.
 
 Important:
 
-If the company is trading near its 52-week high, highlight that as a sign of positive momentum but advise caution about valuations.
+If the company’s Net Profit has shown strong and steady growth, highlight it positively.
 
-If trading near its 52-week low, mention it could be undervalued but investigate why.
+If Net Profit is volatile or declining, mention it carefully as a risk.
 
-If promoter shareholding is stable or increasing, mention it positively.
+If the company is trading near its 52-week high, mention the positive momentum but advise valuation caution.
 
-If cash flows or margins are volatile, mention it as a risk factor.
+If trading near its 52-week low, suggest possible undervaluation but also advise investigating the reason.
 
-Always close with a one-line investment advice summary such as:
-"Based on the above factors, this stock appears to be a stable/growing/balanced opportunity for moderate/long-term investment, with key risks to monitor."
+If promoter shareholding is stable or increasing, mention it as a positive sign.
 
+Always close with a one-line investment advice summary, like:
+
+“Based on its stable net profit growth and strong fundamentals, this stock appears to be a good opportunity for long-term investment, subject to monitoring for profitability risks.”
 Here is the company data:
 {context}
 """
