@@ -333,7 +333,18 @@ def ask_with_langchain(info_dict, question):
 
 def main():
     st.set_page_config(page_title="📊 Screener Stock Analysis", layout="wide")
-    st.title("📈 Screener Stock Analyzer")
+    
+    # Add custom CSS to limit the content width
+    st.markdown("""
+        <style>
+            .main > div {
+                max-width: 50%;
+                margin: auto;
+                padding: 0 1rem;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+    #st.title("📈 Screener Stock Analyzer")
 
     # Load stock symbols
     stock_symbols = load_stock_symbols()
@@ -352,7 +363,7 @@ def main():
     
     # Single searchable dropdown
     selected = st.selectbox(
-        "Search and select a stock:",
+        "Select a stock:",
         options=options,
         key="stock_selector"
     )
@@ -371,8 +382,15 @@ def main():
                 if "Company Name" in info:
                     st.subheader(info["Company Name"])
 
-                # Create two columns for input and display
-                col1, col2 = st.columns([3, 3])
+                # Create a single column for input with wider width
+                col1 = st.container()
+                
+                # Make the text area take up more width
+                st.markdown("""
+                <style>
+                    .stTextArea textarea {width: 100%;}
+                </style>
+                """, unsafe_allow_html=True)
                 
                 with col1:
                     # Question input
