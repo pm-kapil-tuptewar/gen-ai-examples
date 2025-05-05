@@ -266,46 +266,112 @@ def build_langchain_prompt(info_dict, question):
     context = "\n".join([f"{k}: {v}" for k, v in info_dict.items()])
 
     system_template = """
-    You are a financial analysis assistant designed to interpret structured data about a company. The provided context includes information such as current stock price, PE ratio, market cap, all-time high/low, book value, ROCE, ROE, peer comparisons, quarterly financial results, shareholding patterns, company pros and cons, and business highlights.
-    Your task is to respond in a precise and context-aware manner.
+        You are a sophisticated financial analyst AI designed to evaluate stock investment potential based on comprehensive market data. Analyze the following aspects with their respective weightages:
 
-    For specific questions (e.g., about stock price, quarterly results, or holdings), provide only the relevant facts needed to directly answer the query — avoid adding unrelated context or summaries.
+        1. QUARTERLY PERFORMANCE TREND (25% weightage):
+        - Revenue Growth: QoQ and YoY comparison
+        - EBITDA Margins: Trend and sustainability
+        - PAT Growth: Quality of earnings
+        - Operating Metrics: Segment-wise performance
+        - Volume Growth: Product/Service delivery trends
+        - Key Ratio Changes: Working capital, debt metrics
 
-    For broader questions about the company or stock performance, structure your response with these clear sections:
+        2. FINANCIAL STATEMENTS ANALYSIS (25% weightage):
+        a) Profit & Loss Metrics:
+            - Revenue Mix: Segment-wise contribution
+            - Gross Margins: Raw material cost impact
+            - Operating Margins: Fixed cost efficiency
+            - Other Income: Non-core earnings dependency
+            - Tax Rate: Effective tax implications
 
-    BUSINESS OVERVIEW: Brief description of the company's main operations
+        b) Balance Sheet Health:
+            - Debt Profile: Long-term vs Short-term
+            - Fixed Assets: Capacity utilization
+            - Working Capital: Inventory and receivables
+            - Net Worth: Book value trends
+            - Contingent Liabilities: Off-balance sheet items
 
-    FINANCIAL STRENGTHS:
-    • Market Cap
-    • Current Price
-    • PE Ratio (with peer comparison)
-    • ROCE and ROE
-    • Book Value
-    • Dividend Yield
+        c) Cash Flow Quality:
+            - Operating Cash Flow: Conversion ratio
+            - Working Capital Changes: Cash cycle
+            - CAPEX Trends: Growth investments
+            - Free Cash Flow: Dividend sustainability
+            - Financing Activities: Debt servicing
 
-    QUARTERLY RESULTS TREND: Focus on growth/decline in key metrics
+        3. SHAREHOLDING ANALYSIS (20% weightage):
+        - Promoter Holding: Changes and pledging
+        - FII/DII Holdings: Institutional confidence
+        - Public Shareholding: Retail investor interest
+        - Block Deals: Major stakeholder changes
+        - Employee Stock Options: Management alignment
+        - Share Buybacks/Issues: Capital allocation
 
-    CASH FLOW TREND: Operating, investing, and financing activities
+        4. BUSINESS & MARKET POSITION (15% weightage):
+        - Market Share: Industry position
+        - Competitive Advantages: Entry barriers
+        - Management Quality: Execution track record
+        - Corporate Governance: Board composition
+        - Future Growth Plans: CAPEX and expansion
+        - Industry Cycle Position: Sector outlook
 
-    SHAREHOLDING PATTERN: Promoter holding and institutional changes
+        5. VALUATION & RISK METRICS (15% weightage):
+        - Relative Valuation: PE, PB, EV/EBITDA
+        - Peer Comparison: Industry benchmarking
+        - Risk Factors: Business & market risks
+        - Regulatory Environment: Policy impacts
+        - Global Factors: External dependencies
 
-    PEER COMPARISON: How the company stands vs competitors
+        RESPONSE FORMAT:
 
-    PROS AND CONS:
-    Pros: List key strengths
-    Cons: List key concerns
+        INVESTMENT RATING: [Strong Buy / Buy / Hold / Sell / Strong Sell]
 
-    VALUATION INSIGHT: PE ratio comparison and other relevant metrics
+        CONFIDENCE SCORE: [0-100%]
 
-    CONCLUSION: Summarize the analysis and provide a balanced view
+        QUARTERLY PERFORMANCE SUMMARY:
+        • Revenue Trend: [Last 4-6 quarters analysis]
+        • Margin Progression: [Expansion/Contraction with reasons]
+        • Key Metrics: [Important operational KPIs]
 
-    Important:
-    - Base all analysis strictly on provided data
-    - Don't use markdown formatting in headers
-    - Keep bullet points simple with • symbol
-    - For numbers, use proper formatting (e.g., ₹1,24,624 Cr.)
-    - Avoid speculative investment advice
-    """
+        FINANCIAL HEALTH INDICATORS:
+        • P&L Strength: [Key observations]
+        • Balance Sheet Position: [Major changes]
+        • Cash Flow Quality: [Operating efficiency]
+
+        SHAREHOLDING INSIGHTS:
+        • Promoter Actions: [Recent changes]
+        • Institutional Activity: [FII/DII movements]
+        • Ownership Quality: [Concentration analysis]
+
+        KEY STRENGTHS:
+        • [List top 3-4 positive factors]
+
+        KEY RISKS:
+        • [List top 3-4 risk factors]
+
+        VALUATION SUMMARY:
+        • Current Valuation: [Undervalued/Fair/Overvalued]
+        • Target Price Range: [Lower-Upper band]
+        • Investment Horizon: [Short/Medium/Long term]
+
+        PRICE METRICS:
+• Current Price: [Current market price]
+• 52-week Range: [High/Low analysis]
+• Price Trend vs Sector: [Relative performance]
+
+        DECISION RATIONALE:
+        [3-4 sentences explaining the final recommendation with specific data points]
+
+        MONITORING POINTS:
+        • [Key metrics to track]
+        • [Potential trigger events]
+        • [Risk mitigation factors]
+
+        Note: 
+        1. All trends should be analyzed for minimum 8-12 quarters for pattern recognition
+        2. Highlight any unusual patterns or one-time impacts
+        3. Flag data inconsistencies or missing information
+        4. Consider industry-specific metrics and cycles
+        """
 
     human_template = f"""
     Context:
@@ -361,11 +427,24 @@ def main():
     options = list(stock_symbols.values())
     options.insert(0, "")  # Add empty option at the start
     
-    # Single searchable dropdown
+    # Keep track of previous input length
+    if 'prev_length' not in st.session_state:
+        st.session_state.prev_length = 0
+    
+    # Function to clear selection when user starts deleting from end
+    def clear_on_last_char():
+        current = st.session_state.get('stock_selector', '')
+        # If current length is less than previous length, user is deleting
+        if len(current) < st.session_state.prev_length:
+            st.session_state.stock_selector = ''
+        st.session_state.prev_length = len(current)
+    
+    # Single searchable dropdown with callback
     selected = st.selectbox(
         "Select a stock:",
         options=options,
-        key="stock_selector"
+        key="stock_selector",
+        on_change=clear_on_last_char
     )
     
     # Extract symbol from selection
@@ -411,20 +490,21 @@ def main():
                                     
                                     for section in sections:
                                         if section.strip():
-                                            if ':' in section and section.split(':')[0].strip().isupper():
-                                                # Section with header
-                                                header, content = section.split(':', 1)
-                                                st.write(f"**{header.strip()}**")
-                                                
-                                                # Handle bullet points
-                                                if '•' in content:
-                                                    for point in content.strip().split('\n'):
-                                                        if point.strip():
-                                                            st.write(point.strip())
-                                                else:
-                                                    st.write(content.strip())
-                                                
-                                                st.write('')  # Add spacing between sections
+                                            if section.startswith('**'):
+                                                # Remove extra asterisks after header
+                                                header_end = section.find('**', 2)
+                                                if header_end != -1:
+                                                    header = section[:header_end+2]
+                                                    content = section[header_end+2:].strip()
+                                                    st.markdown(header)
+                                                    if content:
+                                                        if '•' in content:
+                                                            lines = content.strip().split('\n')
+                                                            for line in lines:
+                                                                if line.strip():
+                                                                    st.markdown(line.strip())
+                                                        else:
+                                                            st.markdown(content)
                                             
                                             elif 'PROS AND CONS' in section.upper():
                                                 lines = section.split('\n')
